@@ -13,8 +13,7 @@ async function nowDeploy (bodies, randomness) {
       .slice(2);
   }
   const nowJson = JSON.parse(bodies['now.json']);
-  const files = Object.keys(bodies).filter((n) => n !== 'now.json');
-  files.push({
+  const nowJsonContent = JSON.stringify({
     name: 'test',
     version: 2,
     public: true,
@@ -32,8 +31,8 @@ async function nowDeploy (bodies, randomness) {
   await fs.mkdir(tmpDir);
 
   Promise.all(
-    Object.keys(files).map((name) => {
-      const buffer = files[name];
+    Object.keys(bodies).map((name) => {
+      const buffer = name === 'now.json' ? bodies[name] : nowJsonContent;
       const absolutePath = path.join(tmpDir, name);
       return fs.writeFile(absolutePath, buffer);
     })
