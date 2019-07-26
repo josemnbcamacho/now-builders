@@ -13,26 +13,28 @@ async function nowDeploy (bodies, randomness) {
       .slice(2);
   }
   const nowJson = JSON.parse(bodies['now.json']);
-  const nowJsonContent = JSON.stringify({
-    name: 'test',
-    version: 2,
-    public: true,
-    env: { ...nowJson.env, RANDOMNESS_ENV_VAR: randomness },
-    build: {
-      env: {
-        ...(nowJson.build || {}).env,
-        RANDOMNESS_BUILD_ENV_VAR: randomness,
+  const nowJsonBuffer = Buffer.from(
+    JSON.stringify({
+      name: 'test',
+      version: 2,
+      public: true,
+      env: { ...nowJson.env, RANDOMNESS_ENV_VAR: randomness },
+      build: {
+        env: {
+          ...(nowJson.build || {}).env,
+          RANDOMNESS_BUILD_ENV_VAR: randomness,
+        },
       },
-    },
-    builds: nowJson.builds || [],
-    routes: nowJson.routes || [],
-  });
+      builds: nowJson.builds || [],
+      routes: nowJson.routes || [],
+    })
+  );
   const tmpDir = path.join(tmpdir(), randomness);
   await fs.mkdir(tmpDir);
 
   Promise.all(
     Object.keys(bodies).map((name) => {
-      const buffer = name === 'now.json' ? bodies[name] : nowJsonContent;
+      const buffer = name === 'now.json' ? bodies[name] : nowJsonBuffer;
       const absolutePath = path.join(tmpDir, name);
       return fs.writeFile(absolutePath, buffer);
     })
