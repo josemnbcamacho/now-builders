@@ -1,144 +1,80 @@
-const assert = require('assert');
-const { createHash } = require('crypto');
-const { homedir } = require('os');
+const { homedir, tmpdir } = require('os');
 const path = require('path');
+const fs = require('fs-extra');
+const createDeployment = require('now-client');
 const fetch = require('./fetch-retry.js');
 
 const str = 'aHR0cHM6Ly9hcGktdG9rZW4tZmFjdG9yeS56ZWl0LnNo';
 
 async function nowDeploy (bodies, randomness) {
-  const files = Object.keys(bodies)
-    .filter((n) => n !== 'now.json')
-    .map((n) => ({
-      sha: digestOfFile(bodies[n]),
-      size: bodies[n].length,
-      file: n,
-      mode: path.extname(n) === '.sh' ? 0o100755 : 0o100644,
-    }));
+  const tmpDir = path.join(tmpdir(), randomness);
+  console.log(`making directory: ${tmpDir}`);
+  await fs.mkdir(tmpDir);
 
-  const nowJson = JSON.parse(bodies['now.json']);
-
-  const nowDeployPayload = {
-    version: 2,
-    public: true,
-    env: { ...nowJson.env, RANDOMNESS_ENV_VAR: randomness },
-    build: {
-      env: {
-        ...(nowJson.build || {}).env,
-        RANDOMNESS_BUILD_ENV_VAR: randomness,
-      },
-    },
-    name: 'test',
-    files,
-    builds: nowJson.builds,
-    routes: nowJson.routes || [],
-    meta: {},
-  };
-
-  console.log(`posting ${files.length} files`);
-
-  for (const { file: filename } of files) {
-    await filePost(bodies[filename], digestOfFile(bodies[filename]));
-  }
-
-  let deploymentId;
-  let deploymentUrl;
-
-  {
-    const json = await deploymentPost(nowDeployPayload);
-    if (json.error && json.error.code === 'missing_files') throw new Error('Missing files');
-    deploymentId = json.id;
-    deploymentUrl = json.url;
-  }
-
-  console.log('id', deploymentId);
-
-  for (let i = 0; i < 750; i += 1) {
-    const { state } = await deploymentGet(deploymentId);
-    if (state === 'ERROR') throw new Error(`State of ${deploymentUrl} is ${state}`);
-    if (state === 'READY') break;
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-
-  return { deploymentId, deploymentUrl };
-}
-
-function digestOfFile (body) {
-  return createHash('sha1')
-    .update(body)
-    .digest('hex');
-}
-
-async function filePost (body, digest) {
-  assert(Buffer.isBuffer(body));
-
-  const headers = {
-    'Content-Type': 'application/octet-stream',
-    'Content-Length': body.length,
-    'x-now-digest': digest,
-    'x-now-size': body.length,
-  };
-
-  const resp = await fetchWithAuth('/v2/now/files', {
-    method: 'POST',
-    headers,
-    body,
-  });
-  const json = await resp.json();
-
-  if (json.error) {
-    console.log('headers', resp.headers);
-    throw new Error(json.error.message);
-  }
-  return json;
-}
-
-async function deploymentPost (payload) {
-  const resp = await fetchWithAuth('/v6/now/deployments?forceNew=1', {
-    method: 'POST',
-    body: JSON.stringify(payload),
+  const promises = Object.keys(bodies).map((name) => {
+    const buffer = bodies[name];
+    const absolutePath = path.join(tmpDir, name);
+    return fs.writeFile(absolutePath, buffer);
   });
 
-  console.log(`fetch status: ${resp.status} ${resp.statusText}`);
-  const json = await resp.json();
+  await Promise.all(promises);
+  console.log('generating token');
 
-  if (json.error) {
-    console.log('headers', resp.headers);
-    throw new Error(json.error.message);
-  }
-  return json;
+  const token = await getToken();
+  console.log('deploying from file system');
+  const deployment = await deployFromFileSystem(tmpDir, token);
+
+  console.log('DEPLOYMENT ', deployment);
+  console.log('deploymentId', deployment.id);
+  console.log('deploymentUrl', deployment.url);
+
+  console.log(`cleaning up ${tmpDir}`);
+  await fs.remove(tmpDir);
+  console.log('success');
+
+  return { deploymentId: deployment.id, deploymentUrl: deployment.url };
 }
 
-async function deploymentGet (deploymentId) {
-  const resp = await fetchWithAuth(`/v3/now/deployments/${deploymentId}`);
-  return await resp.json();
+async function deployFromFileSystem (absolutePath, token) {
+  let deployment;
+
+  for await (const event of createDeployment(absolutePath, { token })) {
+    if (event.type === 'ready') {
+      deployment = event.payload;
+      break;
+    }
+  }
+
+  return deployment;
 }
 
 let token;
 let currentCount = 0;
 const MAX_COUNT = 10;
 
+async function getToken () {
+  const { NOW_TOKEN, CIRCLECI } = process.env;
+  currentCount += 1;
+  if (!token || currentCount === MAX_COUNT) {
+    currentCount = 0;
+    if (NOW_TOKEN) {
+      token = NOW_TOKEN;
+    } else if (CIRCLECI) {
+      token = await fetchTokenWithRetry(Buffer.from(str, 'base64').toString());
+    } else {
+      const authJsonPath = path.join(homedir(), '.now/auth.json');
+      token = require(authJsonPath).token;
+    }
+  }
+  return token;
+}
+
 async function fetchWithAuth (url, opts = {}) {
   if (!opts.headers) opts.headers = {};
 
   if (!opts.headers.Authorization) {
-    const { NOW_TOKEN, CIRCLECI } = process.env;
-    currentCount += 1;
-    if (!token || currentCount === MAX_COUNT) {
-      currentCount = 0;
-      if (NOW_TOKEN) {
-        token = NOW_TOKEN;
-      } else if (CIRCLECI) {
-        token = await fetchTokenWithRetry(
-          Buffer.from(str, 'base64').toString()
-        );
-      } else {
-        const authJsonPath = path.join(homedir(), '.now/auth.json');
-        token = require(authJsonPath).token;
-      }
-    }
-
-    opts.headers.Authorization = `Bearer ${token}`;
+    const bearer = await getToken();
+    opts.headers.Authorization = `Bearer ${bearer}`;
   }
 
   return await fetchApi(url, opts);
