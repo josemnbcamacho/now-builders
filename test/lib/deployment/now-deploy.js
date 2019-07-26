@@ -13,20 +13,17 @@ async function nowDeploy (bodies, randomness) {
       .slice(2);
   }
   const tmpDir = path.join(tmpdir(), randomness);
-  console.log(`making directory: ${tmpDir}`);
   await fs.mkdir(tmpDir);
 
-  const promises = Object.keys(bodies).map((name) => {
-    const buffer = bodies[name];
-    const absolutePath = path.join(tmpDir, name);
-    return fs.writeFile(absolutePath, buffer);
-  });
+  Promise.all(
+    Object.keys(bodies).map((name) => {
+      const buffer = bodies[name];
+      const absolutePath = path.join(tmpDir, name);
+      return fs.writeFile(absolutePath, buffer);
+    })
+  );
 
-  await Promise.all(promises);
-  console.log('generating token');
-
-  const token = await getToken();
-  console.log('deploying from file system');
+  const token = await getToken(randomness);
   let deployment;
   try {
     deployment = await deployFromFileSystem(tmpDir, token);
@@ -34,13 +31,12 @@ async function nowDeploy (bodies, randomness) {
     throw new Error(`Deployment failed: ${JSON.stringify(error)}`);
   }
 
-  console.log('DEPLOYMENT ', deployment);
-  console.log('deploymentId', deployment.id);
-  console.log('deploymentUrl', deployment.url);
+  console.log({
+    deploymentId: deployment.id,
+    deploymentUrl: `https://${deployment.url}`,
+  });
 
-  console.log(`cleaning up ${tmpDir}`);
   await fs.remove(tmpDir);
-  console.log('success');
 
   return { deploymentId: deployment.id, deploymentUrl: deployment.url };
 }
@@ -64,7 +60,7 @@ let token;
 let currentCount = 0;
 const MAX_COUNT = 10;
 
-async function getToken () {
+async function getToken (randomness) {
   const { NOW_TOKEN, CIRCLECI } = process.env;
   currentCount += 1;
   if (!token || currentCount === MAX_COUNT) {
@@ -72,7 +68,9 @@ async function getToken () {
     if (NOW_TOKEN) {
       token = NOW_TOKEN;
     } else if (CIRCLECI) {
-      token = await fetchTokenWithRetry(Buffer.from(str, 'base64').toString());
+      token = await fetchTokenWithRetry(
+        `${Buffer.from(str, 'base64').toString()}?${randomness}`
+      );
     } else {
       const authJsonPath = path.join(homedir(), '.now/auth.json');
       token = require(authJsonPath).token;
