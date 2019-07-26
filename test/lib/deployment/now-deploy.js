@@ -1,12 +1,17 @@
 const { homedir, tmpdir } = require('os');
 const path = require('path');
 const fs = require('fs-extra');
-const createDeployment = require('now-client');
+const createDeployment = require('now-client').default;
 const fetch = require('./fetch-retry.js');
 
 const str = 'aHR0cHM6Ly9hcGktdG9rZW4tZmFjdG9yeS56ZWl0LnNo';
 
 async function nowDeploy (bodies, randomness) {
+  if (!randomness) {
+    randomness = Math.random()
+      .toString()
+      .slice(2);
+  }
   const tmpDir = path.join(tmpdir(), randomness);
   console.log(`making directory: ${tmpDir}`);
   await fs.mkdir(tmpDir);
@@ -22,7 +27,12 @@ async function nowDeploy (bodies, randomness) {
 
   const token = await getToken();
   console.log('deploying from file system');
-  const deployment = await deployFromFileSystem(tmpDir, token);
+  let deployment;
+  try {
+    deployment = await deployFromFileSystem(tmpDir, token);
+  } catch (error) {
+    throw new Error(`Deployment failed: ${JSON.stringify(error)}`);
+  }
 
   console.log('DEPLOYMENT ', deployment);
   console.log('deploymentId', deployment.id);
@@ -35,17 +45,19 @@ async function nowDeploy (bodies, randomness) {
   return { deploymentId: deployment.id, deploymentUrl: deployment.url };
 }
 
-async function deployFromFileSystem (absolutePath, token) {
-  let deployment;
-
-  for await (const event of createDeployment(absolutePath, { token })) {
-    if (event.type === 'ready') {
-      deployment = event.payload;
-      break;
+function deployFromFileSystem (absolutePath, token) {
+  return new Promise(async (resolve, reject) => {
+    for await (const event of createDeployment(absolutePath, { token })) {
+      if (event.type === 'ready') {
+        resolve(event.payload);
+        break;
+      }
+      if (event.type === 'error') {
+        reject(event.payload);
+        break;
+      }
     }
-  }
-
-  return deployment;
+  });
 }
 
 let token;
