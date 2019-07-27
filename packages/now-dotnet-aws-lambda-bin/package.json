@@ -1,0 +1,14 @@
+{
+  "name": "now-dotnet-aws-lambda-bin",
+  "version": "0.0.33",
+  "license": "MIT",
+  "dependencies": {
+    "execa": "^1.0.0",
+    "mkdirp-promise": "5.0.1",
+    "node-fetch": "^2.2.1",
+    "tar": "4.4.6"
+  },
+  "peerDependencies": {
+    "@now/build-utils": ">=0.0.1"
+  }
+}
